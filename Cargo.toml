@@ -1,0 +1,8 @@
+[package]
+name = "radish"
+version = "0.1.0"
+authors = ["Nicolas Kirchner <nicolas.kirchner@orange.com>"]
+
+[dependencies]
+rand = "0.5"
+ptree = "0.2.1"
