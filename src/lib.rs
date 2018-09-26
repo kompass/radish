@@ -149,20 +149,20 @@ mod tests {
     }
 
     #[bench]
-    fn take_1000_randoms(b: &mut Bencher) {
+    fn take_10000_randoms(b: &mut Bencher) {
     	let mut rng = rand::thread_rng();
 
     	b.iter(|| {
-    		(0..1000).fold(String::from(""), |_, _| rng.sample_iter(&rand::distributions::Alphanumeric).take(10).collect::<String>())
+    		(0..10000).fold(String::from(""), |_, _| rng.sample_iter(&rand::distributions::Alphanumeric).take(10).collect::<String>())
     	})
     }
 
     #[bench]
-    fn add_1000_ints(b: &mut Bencher) {
+    fn add_10000_ints(b: &mut Bencher) {
     	let mut rng = rand::thread_rng();
 
     	b.iter(|| {
-    		(0..1000).fold(Radish::new("first", -1), |rad, value| rad.add(&rng.sample_iter(&rand::distributions::Alphanumeric).take(10).collect::<String>(), value).unwrap())
+    		(0..10000).fold(Radish::new("first", -1), |rad, value| rad.add(&rng.sample_iter(&rand::distributions::Alphanumeric).take(10).collect::<String>(), value).unwrap())
     	})
     }
 }
