@@ -1,9 +1,10 @@
 #![feature(test)]
 
 extern crate test;
-use test::Bencher;
 
 extern crate rand;
+
+use std::rc::Rc;
 
 extern crate ptree;
 use ptree::item::StringItem;
@@ -11,7 +12,7 @@ use ptree::item::StringItem;
 #[derive(Clone, Debug)]
 struct Radish {
 	radix: String,
-	rest: Vec<Radish>,
+	rest: Vec<(char, Rc<Radish>)>,
 	value: Option<i32>
 }
 
@@ -19,8 +20,8 @@ impl Radish {
 	pub fn new(key: &str, value: i32) -> Radish {
 		Radish {
 			radix: String::from(key),
+			rest: Vec::new(),
 			value: Some(value),
-			rest: Vec::new()
 		}
 	}
 
@@ -30,18 +31,19 @@ impl Radish {
 				Err("The key already exists.".to_string())
 			} else {
 				let r = key.get(self.radix.len()..).unwrap();
+				let r_first = r.chars().next().unwrap();
 
 				let mut new_root = self.clone();
 
-				match new_root.rest.binary_search_by(|rad| rad.radix.chars().next().cmp(&r.chars().next())) {
+				match new_root.rest.binary_search_by(|(first_letter, _)| first_letter.cmp(&r_first)) {
 					Ok(found_pos) => {
-						new_root.rest[found_pos] = new_root.rest[found_pos].add(r, value)?;
+						new_root.rest[found_pos] = (r_first, Rc::new(new_root.rest[found_pos].1.add(r, value)?));
 
 						Ok(new_root)
 					},
 
 					Err(insert_pos) => {
-						new_root.rest.insert(insert_pos, Radish::new(r, value));
+						new_root.rest.insert(insert_pos, (r_first, Rc::new(Radish::new(r, value))));
 
 						Ok(new_root)
 					}
@@ -51,15 +53,16 @@ impl Radish {
 			let pos = key.chars().zip(self.radix.chars()).position(|(k, r)| k != r).unwrap();
 
 			let new_root_radix = String::from(&key[..pos]);
+			let new_branch_radix = &key[pos..];
 
-			let new_branch = Radish::new(&key[pos..], value);
+			let new_branch = Radish::new(new_branch_radix, value);
 			
 			let mut old_root_becoming_branch = self.clone();
 			old_root_becoming_branch.radix = String::from(&old_root_becoming_branch.radix[pos..]);
 			
 			Ok(Radish {
 				radix: new_root_radix,
-				rest: vec![old_root_becoming_branch, new_branch],
+				rest: vec![(self.radix.chars().next().unwrap(), Rc::new(old_root_becoming_branch)), (new_branch_radix.chars().next().unwrap(), Rc::new(new_branch))],
 				value: None
 			})
 		}
@@ -71,8 +74,12 @@ impl Radish {
 				self.value
 			} else {
 				let r = key.get(self.radix.len()..).unwrap();
+				let r_first = r.chars().next().unwrap();
 
-				self.rest.iter().filter_map(|rad| rad.get(r)).next()
+				match self.rest.binary_search_by(|(first_letter, _)| first_letter.cmp(&r_first)) {
+					Ok(found_pos) => self.rest[found_pos].1.get(r),
+					Err(_) => None
+				}
 			}
 		} else {
 			None
@@ -82,7 +89,7 @@ impl Radish {
 	pub fn to_tree(&self) -> StringItem {
 		StringItem {
 			text: format!("{}({})", &self.radix, &self.value.map(|val| val.to_string()).unwrap_or(String::from(""))),
-			children: self.rest.iter().map(|b| b.to_tree()).collect()
+			children: self.rest.iter().map(|(_, b)| b.to_tree()).collect()
 		}
 	}
 }
@@ -92,6 +99,7 @@ mod tests {
 	use super::*;
 	use rand;
 	use rand::Rng;
+	use test::Bencher;
 
     #[test]
     fn it_works() {
@@ -135,10 +143,9 @@ mod tests {
         assert_eq!(rad.get("loto"), Some(89));
         assert_eq!(rad.get("pomme"), Some(42));
 
-        let mut rng = rand::thread_rng();
-        let rad = (0..1000).fold(Radish::new("first", -1), |rad, value| rad.add(&rng.sample_iter(&rand::distributions::Alphanumeric).take(10).collect::<String>(), value).unwrap());
+        assert!(rad.add("lololo", 8).is_err());
 
-        ptree::print_tree(&rad.to_tree());
+        ptree::print_tree(&rad.to_tree()).unwrap();
     }
 
     #[bench]
