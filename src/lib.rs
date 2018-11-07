@@ -1,7 +1,6 @@
 #![feature(test)]
 
 extern crate test;
-
 extern crate rand;
 
 use std::rc::Rc;
@@ -17,7 +16,15 @@ struct Radish {
 }
 
 impl Radish {
-	pub fn new(key: &str, value: i32) -> Radish {
+	pub fn new() -> Radish {
+		Radish {
+			radix: String::new(),
+			rest: Vec::new(),
+			value: None,
+		}
+	}
+
+	fn with_value(key: &str, value: i32) -> Radish {
 		Radish {
 			radix: String::from(key),
 			rest: Vec::new(),
@@ -26,6 +33,10 @@ impl Radish {
 	}
 
 	pub fn add(&self, key: &str, value: i32) -> Result<Radish, String> {
+		if self.radix.is_empty() && self.rest.is_empty() {
+			return Ok(Radish::with_value(key, value));
+		}
+
 		if key.starts_with(&self.radix) { // La racine reste la même, on ajoute une branche
 			if key.len() == self.radix.len() {
 				Err("The key already exists.".to_string())
@@ -33,45 +44,55 @@ impl Radish {
 				let r = key.get(self.radix.len()..).unwrap();
 				let r_first = r.chars().next().unwrap();
 
-				let mut new_root = self.clone();
+				let mut new_rest = self.rest.clone();
+				match self.rest.binary_search_by(|(first_letter, _)| first_letter.cmp(&r_first)) {
+					Ok(found_pos) => new_rest[found_pos].1 = Rc::new(self.rest[found_pos].1.add(r, value)?),
 
-				match new_root.rest.binary_search_by(|(first_letter, _)| first_letter.cmp(&r_first)) {
-					Ok(found_pos) => {
-						new_root.rest[found_pos] = (r_first, Rc::new(new_root.rest[found_pos].1.add(r, value)?));
-
-						Ok(new_root)
-					},
-
-					Err(insert_pos) => {
-						new_root.rest.insert(insert_pos, (r_first, Rc::new(Radish::new(r, value))));
-
-						Ok(new_root)
-					}
+					Err(insert_pos) => new_rest.insert(insert_pos, (r_first, Rc::new(Radish::with_value(r, value)))),
 				}
+
+				Ok(Radish {
+					radix: self.radix.clone(),
+					rest: new_rest,
+					value: self.value.clone()
+				})
 			}
 		} else { // La racine change, 
-			let pos = key.chars().zip(self.radix.chars()).position(|(k, r)| k != r).unwrap();
+			let new_root_radix_length = self.radix.chars().zip(key.chars()).position(|(r, k)| r != k).unwrap();
 
-			let new_root_radix = String::from(&key[..pos]);
-			let new_branch_radix = &key[pos..];
+			let new_root_radix = &key[..new_root_radix_length];
+			let new_branch_radix = &key[new_root_radix_length..];
+			let old_root_becoming_branch_radix = &self.radix[new_root_radix_length..];
 
-			let new_branch = Radish::new(new_branch_radix, value);
+			let new_branch = Radish::with_value(new_branch_radix, value);
 			
-			let mut old_root_becoming_branch = self.clone();
-			old_root_becoming_branch.radix = String::from(&old_root_becoming_branch.radix[pos..]);
+			let old_root_becoming_branch = Radish {
+				radix: String::from(old_root_becoming_branch_radix),
+				rest: self.rest.clone(),
+				value: self.value.clone(),
+			};
+
+			let old_root_becoming_branch_radix_first = old_root_becoming_branch_radix.chars().next().unwrap();
+			let new_branch_radix_first = new_branch_radix.chars().next().unwrap();
+
+			let new_rest = if old_root_becoming_branch_radix_first < new_branch_radix_first {
+				vec![(old_root_becoming_branch_radix_first, Rc::new(old_root_becoming_branch)), (new_branch_radix_first, Rc::new(new_branch))]
+			} else {
+				vec![(new_branch_radix_first, Rc::new(new_branch)), (old_root_becoming_branch_radix_first, Rc::new(old_root_becoming_branch))]
+			};
 			
 			Ok(Radish {
-				radix: new_root_radix,
-				rest: vec![(self.radix.chars().next().unwrap(), Rc::new(old_root_becoming_branch)), (new_branch_radix.chars().next().unwrap(), Rc::new(new_branch))],
+				radix: String::from(new_root_radix),
+				rest: new_rest,
 				value: None
 			})
 		}
 	}
 
-	pub fn get(&self, key: &str) -> Option<i32> {
+	pub fn get(&self, key: &str) -> Option<&i32> {
 		if key.starts_with(&self.radix) {
 			if key.len() == self.radix.len() {
-				self.value
+				self.value.as_ref()
 			} else {
 				let r = key.get(self.radix.len()..).unwrap();
 				let r_first = r.chars().next().unwrap();
@@ -92,6 +113,71 @@ impl Radish {
 			children: self.rest.iter().map(|(_, b)| b.to_tree()).collect()
 		}
 	}
+
+	pub fn iter(&self) -> RadishIterator {
+		RadishIterator {
+			root: &self,
+			stack: Vec::new(),
+			father_radix: String::new(),
+		}
+	}
+}
+
+#[derive(Clone, Debug)]
+struct RadishIterator<'a> {
+	root: &'a Radish,
+	stack: Vec<(usize, std::slice::Iter<'a, (char, Rc<Radish>)>)>,
+	father_radix: String,
+}
+
+impl<'a> Iterator for RadishIterator<'a> {
+	type Item = (String, &'a i32);
+
+	fn next(&mut self) -> Option<Self::Item> {
+		if !self.stack.is_empty() {
+			if let Some((_,  rad)) = self.stack.last_mut().unwrap().1.next() {
+				let pushed = if !rad.rest.is_empty() {
+					self.stack.push((rad.radix.len(), rad.rest.iter()));
+					self.father_radix.push_str(&rad.radix);
+
+					true
+				} else {
+					false
+				};
+
+				if let Some(ref value) = rad.value {
+					let mut radix = self.father_radix.clone();
+					if !pushed {
+						radix.push_str(&rad.radix);
+					}
+
+					Some((radix, value))
+				} else {
+					self.next()
+				}
+			} else {
+				let pop_radix_len = self.stack.last().unwrap().0;
+				let father_radix_len = self.father_radix.len();
+				self.father_radix.truncate(father_radix_len - pop_radix_len);
+				self.stack.pop();
+
+				if self.stack.is_empty() {
+					None
+				} else {
+					self.next()
+				}
+			}
+		} else {
+			self.stack.push((self.root.radix.len(), self.root.rest.iter()));
+			self.father_radix.push_str(&self.root.radix);
+
+			if let Some(ref value) = self.root.value {
+				Some((self.root.radix.clone(), value))
+			} else {
+				self.next()
+			}
+		}
+	}
 }
 
 #[cfg(test)]
@@ -102,9 +188,10 @@ mod tests {
 	use test::Bencher;
 
     #[test]
-    fn it_works() {
-        let rad = Radish::new("lol", -1);
-        assert_eq!(rad.get("lol"), Some(-1));
+    fn set_and_get() {
+        let rad = Radish::new();
+        let rad = rad.add("lol", -1).unwrap();
+        assert_eq!(rad.get("lol"), Some(&-1));
         assert_eq!(rad.get("lo"), None);
         assert_eq!(rad.get("lolo"), None);
         assert_eq!(rad.get("lololo"), None);
@@ -112,48 +199,112 @@ mod tests {
         assert_eq!(rad.get("pomme"), None);
 
         let rad = rad.add("lolo", 2).unwrap();
-        assert_eq!(rad.get("lol"), Some(-1));
+        assert_eq!(rad.get("lol"), Some(&-1));
         assert_eq!(rad.get("lo"), None);
-        assert_eq!(rad.get("lolo"), Some(2));
+        assert_eq!(rad.get("lolo"), Some(&2));
         assert_eq!(rad.get("lololo"), None);
         assert_eq!(rad.get("loto"), None);
         assert_eq!(rad.get("pomme"), None);
 
         let rad = rad.add("lololo", 12345).unwrap();
-        assert_eq!(rad.get("lol"), Some(-1));
+        assert_eq!(rad.get("lol"), Some(&-1));
         assert_eq!(rad.get("lo"), None);
-        assert_eq!(rad.get("lolo"), Some(2));
-        assert_eq!(rad.get("lololo"), Some(12345));
+        assert_eq!(rad.get("lolo"), Some(&2));
+        assert_eq!(rad.get("lololo"), Some(&12345));
         assert_eq!(rad.get("loto"), None);
         assert_eq!(rad.get("pomme"), None);
 
         let rad = rad.add("loto", 89).unwrap();
-        assert_eq!(rad.get("lol"), Some(-1));
+        assert_eq!(rad.get("lol"), Some(&-1));
         assert_eq!(rad.get("lo"), None);
-        assert_eq!(rad.get("lolo"), Some(2));
-        assert_eq!(rad.get("lololo"), Some(12345));
-        assert_eq!(rad.get("loto"), Some(89));
+        assert_eq!(rad.get("lolo"), Some(&2));
+        assert_eq!(rad.get("lololo"), Some(&12345));
+        assert_eq!(rad.get("loto"), Some(&89));
         assert_eq!(rad.get("pomme"), None);
 
         let rad = rad.add("pomme", 42).unwrap();
-        assert_eq!(rad.get("lol"), Some(-1));
+        assert_eq!(rad.get("lol"), Some(&-1));
         assert_eq!(rad.get("lo"), None);
-        assert_eq!(rad.get("lolo"), Some(2));
-        assert_eq!(rad.get("lololo"), Some(12345));
-        assert_eq!(rad.get("loto"), Some(89));
-        assert_eq!(rad.get("pomme"), Some(42));
+        assert_eq!(rad.get("lolo"), Some(&2));
+        assert_eq!(rad.get("lololo"), Some(&12345));
+        assert_eq!(rad.get("loto"), Some(&89));
+        assert_eq!(rad.get("pomme"), Some(&42));
+
+        let rad = rad.add("lola", 43).unwrap();
+        assert_eq!(rad.get("lol"), Some(&-1));
+        assert_eq!(rad.get("lo"), None);
+        assert_eq!(rad.get("lolo"), Some(&2));
+        assert_eq!(rad.get("lololo"), Some(&12345));
+        assert_eq!(rad.get("loto"), Some(&89));
+        assert_eq!(rad.get("pomme"), Some(&42));
+        assert_eq!(rad.get("lola"), Some(&43));
 
         assert!(rad.add("lololo", 8).is_err());
 
         ptree::print_tree(&rad.to_tree()).unwrap();
     }
 
+    #[test]
+    fn immutability() {
+    	let rad1 = Radish::new().add("a", 1).unwrap();
+    	assert_eq!(rad1.get("a"), Some(&1));
+    	assert_eq!(rad1.get("b"), None);
+
+    	let rad2 = rad1.add("b", 2).unwrap();
+    	assert_eq!(rad2.get("a"), Some(&1));
+    	assert_eq!(rad2.get("b"), Some(&2));
+    	assert_eq!(rad1.get("a"), Some(&1));
+    	assert_eq!(rad1.get("b"), None);
+    }
+
+    #[test]
+    fn iter() {
+    	let mut rad = Radish::new().add("a", 1).unwrap();
+    	rad = rad.add("b", 2).unwrap();
+    	rad = rad.add("af", 3).unwrap();
+    	rad = rad.add("ab", 4).unwrap();
+    	rad = rad.add("aba", 5).unwrap();
+    	rad = rad.add("bazerty", 6).unwrap();
+    	rad = rad.add("c", 7).unwrap();
+
+    	let mut iter = rad.iter();
+    	assert_eq!(iter.next(), Some((String::from("a"), &1)));
+		assert_eq!(iter.next(), Some((String::from("ab"), &4)));
+		assert_eq!(iter.next(), Some((String::from("aba"), &5)));
+		assert_eq!(iter.next(), Some((String::from("af"), &3)));
+		assert_eq!(iter.next(), Some((String::from("b"), &2)));
+		assert_eq!(iter.next(), Some((String::from("bazerty"), &6)));
+    	assert_eq!(iter.next(), Some((String::from("c"), &7)));
+    	assert_eq!(iter.next(), None);
+    }
+
     #[bench]
-    fn take_10000_randoms(b: &mut Bencher) {
+    fn add_100_ints(b: &mut Bencher) {
     	let mut rng = rand::thread_rng();
 
     	b.iter(|| {
-    		(0..10000).fold(String::from(""), |_, _| rng.sample_iter(&rand::distributions::Alphanumeric).take(10).collect::<String>())
+    		(0..100).fold(Radish::new(), |rad, value| {
+    			let size = rng.gen_range(10, 20);
+    			let key = rng.sample_iter(&rand::distributions::Alphanumeric).take(size).collect::<String>();
+    			let new = rad.add(&key, value).unwrap();
+    			assert_eq!(new.get(&key), Some(&value));
+    			new
+    		})
+    	})
+    }
+
+    #[bench]
+    fn add_1000_ints(b: &mut Bencher) {
+    	let mut rng = rand::thread_rng();
+
+    	b.iter(|| {
+    		(0..1000).fold(Radish::new(), |rad, value| {
+    			let size = rng.gen_range(10, 20);
+    			let key = rng.sample_iter(&rand::distributions::Alphanumeric).take(size).collect::<String>();
+    			let new = rad.add(&key, value).unwrap();
+    			assert_eq!(new.get(&key), Some(&value));
+    			new
+    		})
     	})
     }
 
@@ -162,7 +313,46 @@ mod tests {
     	let mut rng = rand::thread_rng();
 
     	b.iter(|| {
-    		(0..10000).fold(Radish::new("first", -1), |rad, value| rad.add(&rng.sample_iter(&rand::distributions::Alphanumeric).take(10).collect::<String>(), value).unwrap())
+    		(0..10000).fold(Radish::new(), |rad, value| {
+    			let size = rng.gen_range(10, 20);
+    			let key = rng.sample_iter(&rand::distributions::Alphanumeric).take(size).collect::<String>();
+    			let new = rad.add(&key, value).unwrap();
+    			assert_eq!(new.get(&key), Some(&value));
+    			new
+    		})
+    	})
+    }
+
+    #[bench]
+    fn add_100000_ints(b: &mut Bencher) {
+    	let mut rng = rand::thread_rng();
+
+    	b.iter(|| {
+    		(0..100000).fold(Radish::new(), |rad, value| {
+    			let size = rng.gen_range(10, 20);
+    			let key = rng.sample_iter(&rand::distributions::Alphanumeric).take(size).collect::<String>();
+    			let new = rad.add(&key, value).unwrap();
+    			assert_eq!(new.get(&key), Some(&value));
+    			new
+    		})
+    	})
+    }
+
+    #[bench]
+    fn iter_100000_ints(b: &mut Bencher) {
+    	let mut rng = rand::thread_rng();
+
+    	let rad = (0..100000).fold(Radish::new(), |rad, value| {
+    		let size = rng.gen_range(10, 20);
+    		let key = rng.sample_iter(&rand::distributions::Alphanumeric).take(size).collect::<String>();
+    		rad.add(&key, value).unwrap()
+    	});
+
+    	b.iter(|| {
+    		let mut rad_iter = rad.iter();
+    		while let Some((_key, &_value)) = rad_iter.next() {
+
+    		}
     	})
     }
 }
