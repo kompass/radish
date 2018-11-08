@@ -11,9 +11,11 @@ use ptree::item::StringItem;
 extern crate arrayvec;
 use arrayvec::ArrayString;
 
+const RADIX_MAX_LEN: usize = 16;
+
 #[derive(Clone, Debug)]
 pub struct Radish {
-	radix: ArrayString<[u8; 20]>,
+	radix: ArrayString<[u8; RADIX_MAX_LEN]>,
 	rest: Vec<(char, Rc<Radish>)>,
 	value: Option<i32>
 }
@@ -32,10 +34,47 @@ impl Radish {
 	}
 
 	fn with_value(key: &str, value: i32) -> Radish {
-		Radish {
-			radix: ArrayString::from(key).unwrap(),
-			rest: Vec::new(),
-			value: Some(value),
+		if key.len() > RADIX_MAX_LEN {
+			let mut to_split = &key[..];
+			let mut splitted_list = Vec::new();
+
+			while to_split.len() > RADIX_MAX_LEN {
+				let mut split_pos = RADIX_MAX_LEN;
+
+				while !to_split.is_char_boundary(split_pos) {
+					split_pos -= 1;
+				}
+
+				let splitted = to_split.split_at(split_pos);
+				to_split = splitted.1;
+
+				splitted_list.push(splitted.0);
+			}
+
+			splitted_list.push(to_split);
+
+			let mut rad = Radish {
+				radix: ArrayString::from(splitted_list.pop().unwrap()).unwrap(),
+				rest: Vec::new(),
+				value: Some(value),
+			};
+
+			for splitted in splitted_list.iter().rev() {
+				rad = Radish {
+					radix: ArrayString::from(splitted).unwrap(),
+					rest: vec![(rad.radix.chars().next().unwrap(), Rc::new(rad))],
+					value: None,
+				}
+			}
+
+			rad
+
+		} else {
+			Radish {
+				radix: ArrayString::from(key).unwrap(),
+				rest: Vec::new(),
+				value: Some(value),
+			}
 		}
 	}
 
@@ -245,6 +284,16 @@ mod tests {
         assert_eq!(rad.get("loto"), Some(&89));
         assert_eq!(rad.get("pomme"), Some(&42));
         assert_eq!(rad.get("lola"), Some(&43));
+
+        let rad = rad.add("a1a2a3a4a5a6a7a8a9", 18).unwrap();
+        assert_eq!(rad.get("lol"), Some(&-1));
+        assert_eq!(rad.get("lo"), None);
+        assert_eq!(rad.get("lolo"), Some(&2));
+        assert_eq!(rad.get("lololo"), Some(&12345));
+        assert_eq!(rad.get("loto"), Some(&89));
+        assert_eq!(rad.get("pomme"), Some(&42));
+        assert_eq!(rad.get("lola"), Some(&43));
+        assert_eq!(rad.get("a1a2a3a4a5a6a7a8a9"), Some(&18));
 
         assert!(rad.add("lololo", 8).is_err());
 
