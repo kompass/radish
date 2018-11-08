@@ -8,17 +8,24 @@ use std::rc::Rc;
 extern crate ptree;
 use ptree::item::StringItem;
 
+extern crate arrayvec;
+use arrayvec::ArrayString;
+
 #[derive(Clone, Debug)]
-struct Radish {
-	radix: String,
+pub struct Radish {
+	radix: ArrayString<[u8; 20]>,
 	rest: Vec<(char, Rc<Radish>)>,
 	value: Option<i32>
+}
+
+fn starts_with(a: &str, b: &str) -> bool {
+	b.len() <= a.len() && b.chars().zip(a.chars()).all(|(b_c, a_c)| b_c == a_c)
 }
 
 impl Radish {
 	pub fn new() -> Radish {
 		Radish {
-			radix: String::new(),
+			radix: ArrayString::new(),
 			rest: Vec::new(),
 			value: None,
 		}
@@ -26,7 +33,7 @@ impl Radish {
 
 	fn with_value(key: &str, value: i32) -> Radish {
 		Radish {
-			radix: String::from(key),
+			radix: ArrayString::from(key).unwrap(),
 			rest: Vec::new(),
 			value: Some(value),
 		}
@@ -37,7 +44,7 @@ impl Radish {
 			return Ok(Radish::with_value(key, value));
 		}
 
-		if key.starts_with(&self.radix) { // La racine reste la même, on ajoute une branche
+		if starts_with(key, &self.radix) { // La racine reste la même, on ajoute une branche
 			if key.len() == self.radix.len() {
 				Err("The key already exists.".to_string())
 			} else {
@@ -67,7 +74,7 @@ impl Radish {
 			let new_branch = Radish::with_value(new_branch_radix, value);
 			
 			let old_root_becoming_branch = Radish {
-				radix: String::from(old_root_becoming_branch_radix),
+				radix: ArrayString::from(old_root_becoming_branch_radix).unwrap(),
 				rest: self.rest.clone(),
 				value: self.value.clone(),
 			};
@@ -82,7 +89,7 @@ impl Radish {
 			};
 			
 			Ok(Radish {
-				radix: String::from(new_root_radix),
+				radix: ArrayString::from(new_root_radix).unwrap(),
 				rest: new_rest,
 				value: None
 			})
@@ -90,7 +97,7 @@ impl Radish {
 	}
 
 	pub fn get(&self, key: &str) -> Option<&i32> {
-		if key.starts_with(&self.radix) {
+		if starts_with(key, &self.radix) {
 			if key.len() == self.radix.len() {
 				self.value.as_ref()
 			} else {
@@ -124,7 +131,7 @@ impl Radish {
 }
 
 #[derive(Clone, Debug)]
-struct RadishIterator<'a> {
+pub struct RadishIterator<'a> {
 	root: &'a Radish,
 	stack: Vec<(usize, std::slice::Iter<'a, (char, Rc<Radish>)>)>,
 	father_radix: String,
@@ -172,7 +179,7 @@ impl<'a> Iterator for RadishIterator<'a> {
 			self.father_radix.push_str(&self.root.radix);
 
 			if let Some(ref value) = self.root.value {
-				Some((self.root.radix.clone(), value))
+				Some((self.root.radix.to_string(), value))
 			} else {
 				self.next()
 			}

@@ -6,3 +6,4 @@ authors = ["Nicolas Kirchner <nicolas.kirchner@orange.com>"]
 [dependencies]
 rand = "0.5"
 ptree = "0.2.1"
+arrayvec = "0.4.7"
