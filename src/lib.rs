@@ -33,7 +33,7 @@ impl Radish {
 		}
 	}
 
-	fn with_value(key: &str, value: i32) -> Radish {
+	fn with_value_and_rest(key: &str, value: Option<i32>, rest: Vec<(char, Rc<Radish>)>) -> Radish {
 		if key.len() > RADIX_MAX_LEN {
 			let mut to_split = &key[..];
 			let mut splitted_list = Vec::new();
@@ -55,8 +55,8 @@ impl Radish {
 
 			let mut rad = Radish {
 				radix: ArrayString::from(splitted_list.pop().unwrap()).unwrap(),
-				rest: Vec::new(),
-				value: Some(value),
+				rest: rest,
+				value: value,
 			};
 
 			for splitted in splitted_list.iter().rev() {
@@ -72,10 +72,14 @@ impl Radish {
 		} else {
 			Radish {
 				radix: ArrayString::from(key).unwrap(),
-				rest: Vec::new(),
-				value: Some(value),
+				rest: rest,
+				value: value,
 			}
 		}
+	}
+
+	fn with_value(key: &str, value: i32) -> Radish {
+		Self::with_value_and_rest(key, Some(value), Vec::new())
 	}
 
 	pub fn add(&self, key: &str, value: i32) -> Result<Radish, String> {
@@ -130,8 +134,71 @@ impl Radish {
 			Ok(Radish {
 				radix: ArrayString::from(new_root_radix).unwrap(),
 				rest: new_rest,
-				value: None
+				value: None,
 			})
+		}
+	}
+
+	pub fn del(&self, key: &str) -> Result<Radish, String> {
+		if starts_with(key, &self.radix) {
+			if key.len() == self.radix.len() { // La clé est à la racine
+				match self.rest.len() {
+					0 => Ok(Radish::new()), // L'arbre ne contenait qu'une seule valeur, on retourne un arbre vide forme standard
+
+					1 => { // L'arbre ne contenait que deux valeurs imbriquées, la deuxième devient racine après augmentation du radix
+						let mut new_key = self.radix.to_string();
+						new_key.push_str(&&self.rest[0].1.radix);
+
+						Ok(Radish::with_value_and_rest(&new_key, self.rest[0].1.value, self.rest[0].1.rest.clone()))
+					},
+
+					_ => Ok(Radish {
+						radix: self.radix.clone(),
+						rest: self.rest.clone(),
+						value: None,
+					}),
+				}
+			} else { // La clé n'est pas à la racine
+				let r = key.get(self.radix.len()..).unwrap();
+				let r_first = r.chars().next().unwrap();
+
+				match self.rest.binary_search_by(|(first_letter, _)| first_letter.cmp(&r_first)) {
+					Ok(found_pos) => {
+						let mut new_rest = self.rest.clone();
+
+						let mut new_rad = self.rest[found_pos].1.del(&key[self.radix.len()..])?;
+
+						if new_rad.radix.is_empty() { // Il y a un noeud inutile, on le supprime
+							new_rest.remove(found_pos);
+
+							if !new_rad.rest.is_empty() { // Si le noeud inutile a des fils, on les adopte
+								for (_, rad_rc) in new_rad.rest {
+									let mut new_key = self.radix.to_string();
+									new_key.push_str(&rad_rc.radix);
+
+									let new_key_first = new_key.chars().next().unwrap();
+
+									let insert_pos = new_rest.binary_search_by(|(first_letter, _)| first_letter.cmp(&new_key_first)).unwrap_err();
+
+									new_rest.insert(insert_pos, (new_key_first, rad_rc));
+								}
+							}
+						} else {
+							new_rest[found_pos] = (new_rad.radix.chars().next().unwrap(), Rc::new(new_rad));
+						}
+
+						Ok(Radish {
+							radix: self.radix.clone(),
+							rest: new_rest,
+							value: self.value.clone()
+						})
+					},
+
+					Err(_) => Err("The key doesn't exists.".to_string()),
+				}
+			}
+		} else {
+			Err("The key doesn't exists.".to_string())
 		}
 	}
 
@@ -301,12 +368,86 @@ mod tests {
     }
 
     #[test]
+    fn del() {
+    	let rad = Radish::new();
+    	let rad = rad.add("only_key", 1919).unwrap();
+    	let rad = rad.del("only_key").unwrap();
+    	assert_eq!(rad.get("only_key"), None);
+
+    	let rad = Radish::new();
+		let rad = rad.add("lol", -1).unwrap();
+		let rad = rad.add("lolo", 2).unwrap();
+		let rad = rad.add("lololo", 12345).unwrap();
+		let rad = rad.add("loto", 89).unwrap();
+		let rad = rad.add("pomme", 42).unwrap();
+		let rad = rad.add("lola", 43).unwrap();
+		let rad = rad.add("a1a2a3a4a5a6a7a8a9", 18).unwrap();
+
+		assert_eq!(rad.get("lol"), Some(&-1));
+        assert_eq!(rad.get("lo"), None);
+        assert_eq!(rad.get("lolo"), Some(&2));
+        assert_eq!(rad.get("lololo"), Some(&12345));
+        assert_eq!(rad.get("loto"), Some(&89));
+        assert_eq!(rad.get("pomme"), Some(&42));
+        assert_eq!(rad.get("lola"), Some(&43));
+        assert_eq!(rad.get("a1a2a3a4a5a6a7a8a9"), Some(&18));
+
+        let rad = rad.del("pomme").unwrap();
+        assert_eq!(rad.get("lol"), Some(&-1));
+        assert_eq!(rad.get("lo"), None);
+        assert_eq!(rad.get("lolo"), Some(&2));
+        assert_eq!(rad.get("lololo"), Some(&12345));
+        assert_eq!(rad.get("loto"), Some(&89));
+        assert_eq!(rad.get("pomme"), None);
+        assert_eq!(rad.get("lola"), Some(&43));
+        assert_eq!(rad.get("a1a2a3a4a5a6a7a8a9"), Some(&18));
+
+        let rad = rad.del("lol").unwrap();
+        assert_eq!(rad.get("lol"), None);
+        assert_eq!(rad.get("lo"), None);
+        assert_eq!(rad.get("lolo"), Some(&2));
+        assert_eq!(rad.get("lololo"), Some(&12345));
+        assert_eq!(rad.get("loto"), Some(&89));
+        assert_eq!(rad.get("pomme"), None);
+        assert_eq!(rad.get("lola"), Some(&43));
+        assert_eq!(rad.get("a1a2a3a4a5a6a7a8a9"), Some(&18));
+
+        let rad = rad.del("lololo").unwrap();
+        assert_eq!(rad.get("lol"), None);
+        assert_eq!(rad.get("lo"), None);
+        assert_eq!(rad.get("lolo"), Some(&2));
+        assert_eq!(rad.get("lololo"), None);
+        assert_eq!(rad.get("loto"), Some(&89));
+        assert_eq!(rad.get("pomme"), None);
+        assert_eq!(rad.get("lola"), Some(&43));
+        assert_eq!(rad.get("a1a2a3a4a5a6a7a8a9"), Some(&18));
+
+        let rad = rad.del("a1a2a3a4a5a6a7a8a9").unwrap();
+        assert_eq!(rad.get("lol"), None);
+        assert_eq!(rad.get("lo"), None);
+        assert_eq!(rad.get("lolo"), Some(&2));
+        assert_eq!(rad.get("lololo"), None);
+        assert_eq!(rad.get("loto"), Some(&89));
+        assert_eq!(rad.get("pomme"), None);
+        assert_eq!(rad.get("lola"), Some(&43));
+        assert_eq!(rad.get("a1a2a3a4a5a6a7a8a9"), None);
+    }
+
+    #[test]
     fn immutability() {
     	let rad1 = Radish::new().add("a", 1).unwrap();
     	assert_eq!(rad1.get("a"), Some(&1));
     	assert_eq!(rad1.get("b"), None);
 
     	let rad2 = rad1.add("b", 2).unwrap();
+    	assert_eq!(rad2.get("a"), Some(&1));
+    	assert_eq!(rad2.get("b"), Some(&2));
+    	assert_eq!(rad1.get("a"), Some(&1));
+    	assert_eq!(rad1.get("b"), None);
+
+    	let rad3 = rad2.del("a").unwrap();
+    	assert_eq!(rad3.get("a"), None);
+    	assert_eq!(rad3.get("b"), Some(&2));
     	assert_eq!(rad2.get("a"), Some(&1));
     	assert_eq!(rad2.get("b"), Some(&2));
     	assert_eq!(rad1.get("a"), Some(&1));
